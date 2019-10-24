@@ -9,10 +9,10 @@
 use bindgen;
 
 use std::fs::File;
-use std::io::{stderr, Write};
+use std::io::Write;
 
 use crate::headers;
-
+/*
 #[derive(Debug)]
 struct StderrLogger;
 
@@ -24,6 +24,46 @@ impl bindgen::Logger for StderrLogger {
         let _ = writeln!(stderr(), "Bindgen WARNING: {}", msg);
     }
 }
+*/
+
+#[derive(Debug)]
+struct ParseCallback;
+use bindgen::callbacks::IntKind;
+
+impl bindgen::callbacks::ParseCallbacks for ParseCallback {
+    fn int_macro(&self, name: &str, _value: i64) -> Option<IntKind> {
+        if name.contains("MBEDTLS_") {
+            Some(IntKind::I32)
+        } else {
+            None
+        }
+    }
+    fn item_name(&self, original_item_name: &str) -> Option<String> {
+        if original_item_name.starts_with("mbedtls_time_t") {
+            Some(original_item_name.to_string())
+        } else if original_item_name.starts_with("cipher_mode_t_MBEDTLS_") {
+            Some(
+                original_item_name
+                    .trim_start_matches("cipher_mode_t_MBEDTLS_")
+                    .to_string(),
+            )
+        } else if original_item_name.starts_with("mbedtls_") {
+            Some(
+                original_item_name
+                    .trim_start_matches("mbedtls_")
+                    .to_string(),
+            )
+        } else if original_item_name.starts_with("MBEDTLS_") {
+            Some(
+                original_item_name
+                    .trim_start_matches("MBEDTLS_")
+                    .to_string(),
+            )
+        } else {
+            None
+        }
+    }
+}
 
 impl super::BuildConfig {
     pub fn bindgen(&self) {
@@ -33,30 +73,41 @@ impl super::BuildConfig {
                 Ok(for h in headers::enabled_ordered() {
                     writeln!(f, "#include <mbedtls/{}>", h)?;
                 })
-            }).expect("bindgen-input.h I/O error");
+            })
+            .expect("bindgen-input.h I/O error");
 
         let include = self.mbedtls_src.join("include");
 
-        let logger = StderrLogger;
-        let mut bindgen = bindgen::Builder::new(header.into_os_string().into_string().unwrap());
+        //let logger = StderrLogger;
+        let bindgen =
+            bindgen::Builder::default().header(header.into_os_string().into_string().unwrap());
         let bindings = bindgen
-            .log(&logger)
             .clang_arg("-Dmbedtls_t_udbl=mbedtls_t_udbl;") // bindgen can't handle unused uint128
             .clang_arg(format!(
                 "-DMBEDTLS_CONFIG_FILE=<{}>",
                 self.config_h.to_str().expect("config.h UTF-8 error")
-            )).clang_arg(format!(
+            ))
+            .clang_arg(format!(
                 "-I{}",
                 include.to_str().expect("include/ UTF-8 error")
-            )).match_pat(include.to_str().expect("include/ UTF-8 error"))
-            .match_pat(self.config_h.to_str().expect("config.h UTF-8 error"))
-            .use_core(true)
+            ))
+            //.match_pat(include.to_str().expect("include/ UTF-8 error"))
+            //.match_pat(self.config_h.to_str().expect("config.h UTF-8 error"))
+            .use_core()
             .derive_debug(false) // buggy :(
-            .ctypes_prefix(vec!["types".to_owned(), "raw_types".to_owned()])
-            .remove_prefix("mbedtls_")
-            .rust_enums(false)
-            .convert_macros(true)
-            .macro_int_types(
+            .parse_callbacks(Box::new(ParseCallback))
+            .ctypes_prefix("crate::types::raw_types")
+            .blacklist_type("time_t")
+            .blacklist_function("strtold")
+            .blacklist_function("qecvt_r")
+            .blacklist_function("qecvt")
+            .blacklist_function("qfcvt_r")
+            .blacklist_function("qgcvt")
+            .blacklist_function("qfcvt")
+            //.bitfield_enum("cipher_type_t")
+            //.rust_enums(false)
+            //.convert_macros(true)
+            /*.macro_int_types(
                 vec![
                     "sint",
                     "sint",
@@ -67,15 +118,30 @@ impl super::BuildConfig {
                     "sint",
                     "slonglong",
                 ].into_iter(),
-            ).generate()
+            )*/
+            //.disable_name_namespacing()
+            .generate()
             .expect("bindgen error");
 
         let bindings_rs = self.out_dir.join("bindings.rs");
         File::create(&bindings_rs)
             .and_then(|mut f| {
+                f.write_all(b"#![allow(nonstandard_style)]\n")?;
                 bindings.write(Box::new(&mut f))?;
                 f.write_all(b"use crate::types::*;\n") // for FILE, time_t, etc.
-            }).expect("bindings.rs I/O error");
+            })
+            .expect("bindings.rs I/O error");
+        use std::process::Command;
+
+        Command::new("sed")
+            .args(&[
+                "-i",
+                "-e",
+                "s# [a-zA-Z_]*_MBEDTLS_# #g;",
+                bindings_rs.as_os_str().to_string_lossy().as_ref(),
+            ])
+            .status()
+            .unwrap();
 
         let mod_bindings = self.out_dir.join("mod-bindings.rs");
         File::create(&mod_bindings)

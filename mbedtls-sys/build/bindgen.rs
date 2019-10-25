@@ -97,36 +97,21 @@ impl super::BuildConfig {
             .derive_debug(false) // buggy :(
             .parse_callbacks(Box::new(ParseCallback))
             .ctypes_prefix("crate::types::raw_types")
-            .blacklist_type("time_t")
             .blacklist_function("strtold")
             .blacklist_function("qecvt_r")
             .blacklist_function("qecvt")
             .blacklist_function("qfcvt_r")
             .blacklist_function("qgcvt")
             .blacklist_function("qfcvt")
-            //.bitfield_enum("cipher_type_t")
-            //.rust_enums(false)
-            //.convert_macros(true)
-            /*.macro_int_types(
-                vec![
-                    "sint",
-                    "sint",
-                    "sint",
-                    "slonglong",
-                    "sint",
-                    "sint",
-                    "sint",
-                    "slonglong",
-                ].into_iter(),
-            )*/
-            //.disable_name_namespacing()
+            .opaque_type("std::*")
+            .generate_comments(false)
             .generate()
             .expect("bindgen error");
 
         let bindings_rs = self.out_dir.join("bindings.rs");
         File::create(&bindings_rs)
             .and_then(|mut f| {
-                f.write_all(b"#![allow(nonstandard_style)]\n")?;
+                f.write_all(b"#![allow(nonstandard_style)]\n#![allow(unused_imports)]\n")?;
                 bindings.write(Box::new(&mut f))?;
                 f.write_all(b"use crate::types::*;\n") // for FILE, time_t, etc.
             })
